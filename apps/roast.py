@@ -163,7 +163,7 @@ def vista():
             ], spacing=16,
         ),
         padding=26, bgcolor="#241A32", border_radius=24,
-        border=ft.Border.all(1, "#58466B"), width=520,
+        border=ft.Border.all(1, "#58466B"), col={"xs": 12, "lg": 7},
     )
 
     izquierda = ft.Container(
@@ -181,7 +181,7 @@ def vista():
                 ft.Row([ft.Icon(ft.Icons.FAVORITE_BORDER, color="#C4B5FD", size=18), ft.Text("Siempre con respeto", color=BLANCO, size=14)], spacing=10),
             ], spacing=18, alignment=ft.MainAxisAlignment.CENTER,
         ),
-        padding=28, width=420,
+        padding=28, col={"xs": 12, "lg": 5},
     )
 
     return ft.Container(
@@ -194,7 +194,7 @@ def vista():
                     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 ),
                 ft.Container(height=24),
-                ft.Row([izquierda, panel], alignment=ft.MainAxisAlignment.CENTER, vertical_alignment=ft.CrossAxisAlignment.CENTER, wrap=True, spacing=20),
+                ft.ResponsiveRow(controls=[izquierda, panel], spacing=20, run_spacing=20, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.Container(height=16),
                 ft.Text("HECHO PARA COMPARTIR UNA RISA 💜", color="#806D91", size=10, weight=ft.FontWeight.BOLD),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=4,
@@ -202,3 +202,4 @@ def vista():
         padding=ft.Padding.only(left=22, right=22, top=16, bottom=24),
         bgcolor="#100C16", expand=True,
     )
+
