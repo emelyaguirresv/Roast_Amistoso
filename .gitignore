@@ -1,0 +1,6 @@
+# Nunca subir los secretos ni archivos de entorno al repositorio.
+.streamlit/secrets
+.vscode/.streamlit/secrets
+.env
+.venv/
+__pycache__/

@@ -1,0 +1,4 @@
+# Paquetes requeridos por la guía de Flet.
+flet
+flet-web
+httpx
