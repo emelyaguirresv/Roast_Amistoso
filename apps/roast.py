@@ -1,5 +1,6 @@
 import asyncio
 import base64
+from pathlib import Path
 
 import flet as ft
 import flet_audio as fta
@@ -33,6 +34,7 @@ INSTRUCCION_OCR = (
     'conservando el orden y los saltos de línea. Si no hay texto legible, responde: No se encontró texto legible.'
 )
 MAX_TEXTO = 4000
+LOGO_BYTES = (Path(__file__).resolve().parent.parent / "assets" / "labu-removebg-preview.png").read_bytes()
 
 
 def vista(page: ft.Page):
@@ -100,13 +102,24 @@ def vista(page: ft.Page):
             border_radius=20,
             width=min(700, max(250, (page.width or 1000) * 0.78)),
         )
+        avatar = (
+            ft.Icon(ft.Icons.PERSON, color="#E9D5FF", size=17)
+            if usuario
+            else ft.Image(
+                src=LOGO_BYTES,
+                width=42,
+                height=42,
+                fit=ft.BoxFit.CONTAIN,
+                semantics_label="Logo Labu",
+            )
+        )
         icono = ft.Container(
-            content=ft.Icon(ft.Icons.PERSON if usuario else ft.Icons.AUTO_AWESOME, color="#E9D5FF", size=17),
-            width=34,
-            height=34,
+            content=avatar,
+            width=42,
+            height=42,
             alignment=ft.Alignment(0, 0),
             bgcolor="#382653" if usuario else "#332248",
-            border_radius=17,
+            border_radius=21,
         )
         fila = ft.Row(
             controls=[icono, burbuja] if not usuario else [burbuja, icono],
@@ -441,11 +454,17 @@ def vista(page: ft.Page):
                 ft.Row(
                     [
                         ft.Container(
-                            content=ft.Icon(ft.Icons.FAVORITE, color="#F0ABFC", size=18),
-                            width=38,
-                            height=38,
+                            content=ft.Image(
+                                src=LOGO_BYTES,
+                                width=48,
+                                height=48,
+                                fit=ft.BoxFit.CONTAIN,
+                                semantics_label="Logo Labu",
+                            ),
+                            width=48,
+                            height=48,
                             bgcolor="#30213F",
-                            border_radius=19,
+                            border_radius=24,
                             alignment=ft.Alignment(0, 0),
                         ),
                         ft.Column(
