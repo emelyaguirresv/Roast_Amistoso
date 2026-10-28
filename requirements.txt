@@ -3,3 +3,6 @@ flet
 flet-web
 flet-audio-recorder
 httpx
+google-genai
+flet-audio
+edge-tts

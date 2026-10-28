@@ -33,13 +33,14 @@ def ia(instruccion, texto, como_json=False):
     }
     try:
         respuesta = None
+        reintentables = {404, 429, 500, 502, 503, 504}
         for modelo in MODELOS:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
             respuesta = httpx.post(url, timeout=35, headers={"x-goog-api-key": clave}, json=payload)
-            if respuesta.status_code != 404:
+            if respuesta.status_code not in reintentables:
                 break
         if respuesta is None or respuesta.status_code == 404:
-            raise RuntimeError("No encontramos un modelo Gemini disponible para esta llave. Revisa el acceso de AI Studio.")
+            raise RuntimeError("No encontramos un modelo Gemini disponible para esta llave.")
     except httpx.TimeoutException as exc:
         raise RuntimeError("La conexión tardó demasiado. Inténtalo de nuevo.") from exc
     except httpx.RequestError as exc:
@@ -51,7 +52,9 @@ def ia(instruccion, texto, como_json=False):
         elif respuesta.status_code in (400, 403):
             detalle = "La llave o el acceso a Gemini no son válidos. Revisa el secreto de AI Studio."
         elif respuesta.status_code == 429:
-            detalle = "La IA alcanzó su cuota por ahora. Espera un momento e inténtalo de nuevo."
+            detalle = "La IA alcanzó su cuota en todos los modelos disponibles. Espera un momento e inténtalo de nuevo."
+        elif respuesta.status_code in (500, 502, 503, 504):
+            detalle = "Los modelos de Gemini están temporalmente ocupados. Espera un momento e inténtalo de nuevo."
         else:
             detalle = f"La IA respondió con un error ({respuesta.status_code}). Inténtalo de nuevo."
         raise RuntimeError(detalle)

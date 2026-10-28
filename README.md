@@ -29,11 +29,13 @@ Crea un Space de tipo **Docker** en Hugging Face, sube estos archivos y agrega `
 
 La app escucha el puerto `PORT` que define el alojamiento y no requiere permisos especiales del celular.
 
-## Entradas disponibles
+## Funciones del chat
 
-- Voz en español: graba hasta 30 segundos, transcribe y deja el texto listo para revisar.
-- Foto de un objeto: Gemini la usa como inspiración para las bromas.
-- Archivo `.txt`: carga el texto para revisarlo antes de generar.
-- Lectura de texto en foto: extrae el texto visible y lo coloca en el campo para que puedas revisarlo.
+- Escribe o dicta un mensaje y recibe tres bromas amistosas.
+- Adjunta una foto con el botón **+** para inspirar la respuesta.
+- Usa **Crear imagen** para generar una ilustración a partir de lo escrito o dictado; también puede usar una foto adjunta como referencia.
+- El micrófono graba hasta 30 segundos, con reducción de ruido, cancelación de eco y ajuste automático cuando el dispositivo lo admite.
+- El altavoz lee en voz alta el texto del cuadro de mensaje.
+- En el menú **+** también puedes cargar un archivo `.txt` o extraer el texto de una foto.
 
-No subas fotos de personas ni información privada. En un celular, el micrófono requiere un enlace HTTPS; la dirección local `127.0.0.1` solo funciona en la computadora donde corre la app.
+Los audios e imágenes se procesan en línea. La generación de imágenes puede generar un cargo en Google AI Studio. Evita información privada.
