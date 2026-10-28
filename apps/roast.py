@@ -562,7 +562,7 @@ def vista(page: ft.Page):
                 mensajes,
                 ft.Container(
                     content=ft.Column(
-                        [aviso, composer, ft.Text("Tu audio y tus imágenes se procesan en línea. Crear imágenes requiere facturación de Google (aprox. $0.034 por imagen 1K). Evita datos privados.", size=10, color="#857992", text_align=ft.TextAlign.CENTER)],
+                        [aviso, composer, ft.Text("Para crear imágenes, añade un token Hugging Face con permiso Inference Providers. Incluye créditos mensuales; al agotarse, Hugging Face requiere comprar más. Evita datos privados.", size=10, color="#857992", text_align=ft.TextAlign.CENTER)],
                         spacing=7,
                         horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
                     ),

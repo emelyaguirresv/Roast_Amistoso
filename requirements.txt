@@ -6,3 +6,4 @@ httpx
 google-genai
 flet-audio
 edge-tts
+huggingface_hub

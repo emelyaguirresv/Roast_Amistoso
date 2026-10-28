@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import wave
+from pathlib import Path
 
 import edge_tts
 import httpx
@@ -12,6 +13,22 @@ from google import genai
 from ia import MODELOS, _leer_clave
 
 MAX_ARCHIVO = 15_000_000
+
+
+def _leer_token_huggingface():
+    """Lee el token de inference sin confundirlo con la llave de Gemini."""
+    token = os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
+    if token:
+        return token
+    archivo = Path(__file__).parent / ".streamlit" / "secrets"
+    if archivo.is_file():
+        for linea in archivo.read_text(encoding="utf-8").splitlines():
+            if linea.strip().startswith("HF_TOKEN="):
+                return linea.split("=", 1)[1].strip().strip("\"'")
+    token_file = Path(__file__).parent / ".streamlit" / "hf_token"
+    if token_file.is_file():
+        return token_file.read_text(encoding="utf-8").strip()
+    return ""
 
 
 def pcm_a_wav(pcm: bytes, tasa: int = 44100, canales: int = 1) -> bytes:
@@ -169,83 +186,52 @@ def transcribir_audio(datos: bytes, instruccion: str = "", mime: str = "audio/wa
         cliente.close()
 
 def generar_imagen(prompt: str, imagen_referencia: bytes | None = None, mime: str = "image/jpeg") -> tuple[bytes, str]:
-    """Genera una ilustración con Nano Banana y devuelve sus bytes y MIME."""
-    clave = _leer_clave()
-    if not clave:
-        raise RuntimeError("Falta una llave de Google AI Studio en GEMINI_API_KEY.")
+    """Genera una ilustración con Hugging Face o, si no hay token, Gemini."""
     prompt = prompt.strip()
     if not prompt:
         raise RuntimeError("Escribe o dicta una idea antes de crear la imagen.")
     if len(prompt) > 4000:
         raise RuntimeError("La idea supera 4000 caracteres. Acórtala e inténtalo de nuevo.")
-    texto_pedido = (
-        "Crea una ilustración original, amistosa y visualmente atractiva basada en esta idea. "
-        "No agregues texto salvo que el usuario lo solicite. Idea: " + prompt
+    token_hf = _leer_token_huggingface()
+    if token_hf:
+        try:
+            from huggingface_hub import InferenceClient
+
+            cliente = InferenceClient(provider="fal-ai", api_key=token_hf, timeout=120)
+            indicacion = (
+                "Friendly, colorful, polished illustration. No text unless requested. "
+                "Concept: " + prompt
+            )
+            if imagen_referencia:
+                _validar_archivo(imagen_referencia, mime)
+                imagen = cliente.image_to_image(
+                    imagen_referencia,
+                    prompt=indicacion,
+                    model="black-forest-labs/FLUX.2-klein-9B",
+                )
+            else:
+                imagen = cliente.text_to_image(
+                    prompt=indicacion,
+                    model="krea/Krea-2-Turbo",
+                )
+            buffer = io.BytesIO()
+            imagen.save(buffer, format="PNG")
+            return buffer.getvalue(), "image/png"
+        except Exception as exc:
+            codigo = _error_api(exc)
+            texto_error = str(exc).lower()
+            if codigo in (401, 403) or "permission" in texto_error or "token" in texto_error:
+                raise RuntimeError("Hugging Face rechazó la llave. Usa un token con permiso Inference Providers (Make calls to Inference Providers).") from exc
+            if codigo == 402 or "credit" in texto_error or "billing" in texto_error:
+                raise RuntimeError("Se agotaron los créditos gratuitos mensuales de Hugging Face. Revisa tu uso y créditos en Hugging Face.") from exc
+            if codigo == 429:
+                raise RuntimeError("El generador de Hugging Face está ocupado o alcanzó su límite. Inténtalo en un momento.") from exc
+            raise RuntimeError("Hugging Face no pudo crear la imagen. Comprueba que tu token tenga permiso Inference Providers.") from exc
+
+    raise RuntimeError(
+        "Falta HF_TOKEN. Añádelo en los secretos de Hugging Face con permiso Inference Providers; "
+        "así se usan primero los créditos incluidos y no se intenta un servicio de pago de Google."
     )
-    if imagen_referencia:
-        _validar_archivo(imagen_referencia, mime)
-        entrada = [
-            {"type": "text", "text": texto_pedido + " Usa la foto adjunta solo como referencia visual."},
-            {"type": "image", "data": base64.b64encode(imagen_referencia).decode("ascii"), "mime_type": mime},
-        ]
-    else:
-        entrada = texto_pedido
-
-    cuerpo = {
-        "model": "gemini-nano-banana-2.1",
-        "input": entrada,
-        "response_format": {
-            "type": "image",
-            "mime_type": "image/jpeg",
-            "aspect_ratio": "1:1",
-            "image_size": "1K",
-        },
-    }
-    try:
-        respuesta = httpx.post(
-            "https://generativelanguage.googleapis.com/v1beta/interactions",
-            headers={"x-goog-api-key": clave},
-            json=cuerpo,
-            timeout=httpx.Timeout(120, connect=10),
-        )
-    except httpx.TimeoutException as exc:
-        raise RuntimeError("Gemini tardó demasiado en crear la imagen. Inténtalo de nuevo.") from exc
-    except httpx.RequestError as exc:
-        raise RuntimeError("No pudimos conectar con Gemini. Revisa tu conexión y vuelve a intentarlo.") from exc
-
-    try:
-        resultado = respuesta.json()
-    except ValueError as exc:
-        raise RuntimeError("Gemini devolvió una respuesta inesperada al crear la imagen.") from exc
-
-    if respuesta.status_code != 200:
-        error = resultado.get("error", {}) if isinstance(resultado, dict) else {}
-        detalle = str(error.get("message", ""))
-        if respuesta.status_code == 401:
-            mensaje = "Google rechazó la llave. Revisa GEMINI_API_KEY en AI Studio."
-        elif respuesta.status_code == 403:
-            mensaje = "Google no autorizó la generación. Revisa el acceso de facturación de esta llave."
-        elif respuesta.status_code == 429 and ("limit: 0" in detalle.lower() or "free tier" in detalle.lower()):
-            mensaje = "Google no incluye generación de imágenes en la cuota gratuita de esta llave. Activa la facturación en Google AI Studio para crear imágenes."
-        elif respuesta.status_code == 429:
-            mensaje = "Google alcanzó el límite de imágenes de esta llave. Espera un poco e inténtalo de nuevo."
-        elif respuesta.status_code == 404:
-            mensaje = "Google no encontró Nano Banana para esta llave. Revisa que la llave corresponda al proyecto correcto."
-        elif respuesta.status_code == 400:
-            mensaje = "Google rechazó el formato de la solicitud de imagen. Inténtalo de nuevo con una descripción más sencilla."
-        else:
-            mensaje = f"Google respondió con un error ({respuesta.status_code}) al crear la imagen."
-        raise RuntimeError(mensaje)
-
-    salida = resultado.get("output_image") or {}
-    data = salida.get("data") if isinstance(salida, dict) else None
-    mime_salida = salida.get("mime_type") if isinstance(salida, dict) else None
-    if not data:
-        raise RuntimeError("Gemini terminó, pero no devolvió una imagen. Prueba con otra descripción.")
-    try:
-        return base64.b64decode(data, validate=True), mime_salida or "image/png"
-    except (ValueError, TypeError) as exc:
-        raise RuntimeError("No pudimos abrir la imagen que generó Gemini.") from exc
 
 
 async def sintetizar_voz(texto: str) -> bytes:

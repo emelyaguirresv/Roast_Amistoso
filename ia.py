@@ -18,13 +18,19 @@ for candidato in (
 
 
 def _leer_clave():
-    """Lee la clave del entorno o del archivo local de secretos."""
+    """Lee la clave de Gemini del entorno o del archivo local de secretos."""
     clave = os.getenv("GEMINI_API_KEY", "").strip()
     if clave:
         return clave
     archivo = Path(__file__).parent / ".streamlit" / "secrets"
     if archivo.is_file():
-        return archivo.read_text(encoding="utf-8").strip()
+        contenido = archivo.read_text(encoding="utf-8").strip()
+        for linea in contenido.splitlines():
+            if linea.strip().startswith("GEMINI_API_KEY="):
+                return linea.split("=", 1)[1].strip().strip("\"'")
+        # Compatibilidad con el formato anterior: una llave de Gemini sin nombre.
+        if "=" not in contenido and contenido:
+            return contenido
     return ""
 
 
