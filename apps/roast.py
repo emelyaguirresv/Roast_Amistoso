@@ -1,27 +1,60 @@
 import asyncio
+
 import flet as ft
+from flet_audio_recorder import AudioEncoder, AudioRecorder, AudioRecorderConfiguration
+
 from ia import ia
+from multimedia import ia_media, pcm_a_wav
 
 INSTRUCCION = (
     'Responde SOLO con JSON válido y exactamente estos campos: '
     '{"broma1":"...","broma2":"...","broma3":"..."}. '
-    'Escribe tres bromas amistosas, breves y originales sobre el hábito indicado. '
+    'Escribe tres bromas amistosas, breves y originales sobre el hábito u objeto indicado. '
     'Que suenen naturales, cariñosas y fáciles de compartir entre amigos. '
-    'Nunca insultes, humilles ni hagas bromas sobre apariencia, salud, origen, '
-    'religión, discapacidad, identidad o situación económica. Si el hábito no '
-    'permite una broma respetuosa, elige bromas suaves sobre lo cotidiano.'
+    'Nunca insultes, humilles ni hagas bromas sobre apariencia, salud, origen, religión, '
+    'discapacidad, identidad o situación económica. No bromees sobre personas que aparezcan '
+    'en una imagen; si aparece una persona, haz bromas suaves sobre un objeto cotidiano.'
+)
+INSTRUCCION_FOTO = (
+    INSTRUCCION + ' Observa la imagen y basa las bromas en el objeto cotidiano principal. '
+    'No identifiques a nadie ni describas personas.'
+)
+INSTRUCCION_VOZ = (
+    'Transcribe en español únicamente las palabras que se escuchan con claridad. '
+    'No agregues explicaciones, nombres ni información que no se haya dicho.'
+)
+INSTRUCCION_OCR = (
+    'Lee el texto visible en la imagen. Devuelve únicamente el texto que se pueda leer, '
+    'conservando el orden y los saltos de línea. Si no hay texto legible, responde: '
+    'No se encontró texto legible.'
 )
 MORADO = "#8B5CF6"
 BLANCO = "#FFFFFF"
+MAX_TEXTO = 4000
 
 
-def vista():
+def vista(page: ft.Page):
+    # Los servicios de Flet permiten seleccionar archivos y grabar desde el navegador.
+    selector = ft.FilePicker()
+    fragmentos_audio = []
+    grabando = False
+    tarea_limite = None
+    imagen_actual = {"bytes": None, "mime": None, "nombre": ""}
+
+    def recibir_audio(evento):
+        if evento.chunk:
+            fragmentos_audio.append(evento.chunk)
+
+    grabadora = AudioRecorder(on_stream=recibir_audio)
+    page.services.append(selector)
+    page.services.append(grabadora)
+
     entrada = ft.TextField(
         label="¿Qué hábito vamos a roast-ear?",
         hint_text="Ejemplo: siempre llega cinco minutos tarde",
         multiline=True,
         min_lines=2,
-        max_lines=3,
+        max_lines=4,
         border_color="#70539A",
         focused_border_color="#C4B5FD",
         color=BLANCO,
@@ -33,20 +66,31 @@ def vista():
     )
     resultados = ft.Column(spacing=12)
     estado = ft.Text(color="#D8CBEA", size=14)
+    archivo_estado = ft.Text(color="#C4B5FD", size=12)
     boton = ft.Button("Crear mi roast", icon=ft.Icons.AUTO_AWESOME)
     otra = ft.Button("Otra ronda", icon=ft.Icons.REFRESH)
+    microfono = ft.Button("Hablar (máx. 30 s)", icon=ft.Icons.MIC)
+    foto = ft.Button("Usar foto de objeto", icon=ft.Icons.IMAGE)
+    texto = ft.Button("Cargar archivo .txt", icon=ft.Icons.UPLOAD_FILE)
+    leer_foto = ft.Button("Leer texto de una foto", icon=ft.Icons.TEXT_FIELDS)
 
     boton.style = ft.ButtonStyle(
         bgcolor=MORADO, color=BLANCO, padding=18,
         shape=ft.RoundedRectangleBorder(radius=14),
     )
-    otra.style = ft.ButtonStyle(
-        bgcolor="#332C3F", color=BLANCO, padding=18,
-        shape=ft.RoundedRectangleBorder(radius=14),
-    )
+    for control in (otra, microfono, foto, texto, leer_foto):
+        control.style = ft.ButtonStyle(
+            bgcolor="#332C3F", color=BLANCO, padding=14,
+            shape=ft.RoundedRectangleBorder(radius=14),
+        )
 
-    def poner_ejemplo(e):
-        entrada.value = e.control.data
+    def avisar(mensaje, color="#D8CBEA"):
+        estado.value = mensaje
+        estado.color = color
+        estado.update()
+
+    def poner_ejemplo(evento):
+        entrada.value = evento.control.data
         entrada.update()
         entrada.focus()
 
@@ -83,50 +127,219 @@ def vista():
             raise ValueError("La respuesta no incluyó las tres bromas.")
         resultados.controls = controles
 
-    async def generar(e):
+    def mime_de_imagen(nombre):
+        extension = nombre.lower().rsplit(".", 1)[-1] if "." in nombre else ""
+        return {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}.get(extension)
+
+    async def elegir_imagen(evento):
+        archivos = await selector.pick_files(
+            file_type=ft.FilePickerFileType.IMAGE,
+            allow_multiple=False,
+            with_data=True,
+        )
+        if not archivos:
+            return
+        archivo = archivos[0]
+        tipo = mime_de_imagen(archivo.name)
+        if not tipo:
+            avisar("Usa una imagen JPG, PNG o WEBP.", "#FDE68A")
+            return
+        if not archivo.bytes:
+            avisar("No pudimos leer la foto. Vuelve a elegirla.", "#FFC6D2")
+            return
+        imagen_actual.update({"bytes": archivo.bytes, "mime": tipo, "nombre": archivo.name})
+        archivo_estado.value = f"Foto lista: {archivo.name}. Pulsa Crear mi roast para usarla."
+        archivo_estado.update()
+        avisar("Foto cargada. Se enviará a Gemini cuando generes las bromas.")
+
+    async def cargar_txt(evento):
+        archivos = await selector.pick_files(
+            file_type=ft.FilePickerFileType.CUSTOM,
+            allowed_extensions=["txt"],
+            allow_multiple=False,
+            with_data=True,
+        )
+        if not archivos:
+            return
+        archivo = archivos[0]
+        if not archivo.bytes:
+            avisar("El archivo está vacío o no pudimos leerlo.", "#FFC6D2")
+            return
+        if len(archivo.bytes) > 50_000:
+            avisar("El archivo supera 50 KB. Guarda una versión más corta.", "#FDE68A")
+            return
+        try:
+            contenido = archivo.bytes.decode("utf-8-sig").strip()
+        except UnicodeDecodeError:
+            avisar("El archivo debe estar guardado como texto UTF-8.", "#FDE68A")
+            return
+        if not contenido:
+            avisar("El archivo no contiene texto. Elige otro archivo .txt.", "#FDE68A")
+            return
+        if len(contenido) > MAX_TEXTO:
+            avisar("El texto supera 4000 caracteres. Acórtalo antes de usarlo.", "#FDE68A")
+            return
+        imagen_actual.update({"bytes": None, "mime": None, "nombre": ""})
+        entrada.value = contenido
+        entrada.update()
+        archivo_estado.value = f"Texto cargado: {archivo.name}"
+        archivo_estado.update()
+        avisar("Revisa el texto y pulsa Crear mi roast para usarlo.")
+
+    async def leer_texto_foto(evento):
+        archivos = await selector.pick_files(
+            file_type=ft.FilePickerFileType.IMAGE,
+            allow_multiple=False,
+            with_data=True,
+        )
+        if not archivos:
+            return
+        archivo = archivos[0]
+        tipo = mime_de_imagen(archivo.name)
+        if not tipo or not archivo.bytes:
+            avisar("Elige una imagen JPG, PNG o WEBP que se pueda leer.", "#FDE68A")
+            return
+        if len(archivo.bytes) > 15_000_000:
+            avisar("La foto supera 15 MB. Elige una imagen más pequeña.", "#FDE68A")
+            return
+        leer_foto.disabled = True
+        leer_foto.update()
+        avisar("Leyendo el texto de la foto…")
+        try:
+            transcripcion = await asyncio.to_thread(
+                ia_media, INSTRUCCION_OCR, archivo.bytes, tipo, "", False
+            )
+            transcripcion = transcripcion.strip()
+            if not transcripcion or transcripcion == "No se encontró texto legible.":
+                raise RuntimeError("No encontramos texto legible. Prueba con una foto más clara.")
+            if len(transcripcion) > MAX_TEXTO:
+                raise RuntimeError("El texto leído supera 4000 caracteres. Usa una foto con menos texto.")
+            imagen_actual.update({"bytes": None, "mime": None, "nombre": ""})
+            entrada.value = transcripcion
+            entrada.update()
+            archivo_estado.value = f"Texto leído de: {archivo.name}"
+            archivo_estado.update()
+            avisar("Texto extraído. Revísalo y pulsa Crear mi roast para usarlo.", "#C4F1D0")
+        except Exception as exc:
+            avisar(str(exc) if isinstance(exc, RuntimeError) else "No pudimos leer la foto. Inténtalo con otra imagen.", "#FFC6D2")
+        finally:
+            leer_foto.disabled = False
+            leer_foto.update()
+
+    async def generar(evento):
         rasgo = (entrada.value or "").strip()
-        if not rasgo:
-            estado.value = "Escribe un hábito primero para preparar las bromas."
-            estado.color = "#FDE68A"
-            estado.update()
+        datos_foto = imagen_actual["bytes"]
+        if not rasgo and not datos_foto:
+            avisar("Escribe, habla, carga un .txt o elige una foto primero.", "#FDE68A")
             entrada.focus()
             return
-        if len(rasgo) > 240:
-            estado.value = "Hazlo más breve: máximo 240 caracteres."
-            estado.color = "#FDE68A"
-            estado.update()
+        if len(rasgo) > MAX_TEXTO:
+            avisar("El texto supera 4000 caracteres. Acórtalo antes de continuar.", "#FDE68A")
             return
 
         boton.disabled = True
         otra.disabled = True
-        estado.value = "La IA está preparando tres bromas…"
-        estado.color = "#D8CBEA"
         resultados.controls.clear()
         boton.update()
         otra.update()
-        estado.update()
         resultados.update()
+        avisar("La IA está preparando tres bromas…")
         try:
-            datos = await asyncio.to_thread(ia, INSTRUCCION, rasgo, True)
+            if datos_foto:
+                datos = await asyncio.to_thread(
+                    ia_media, INSTRUCCION_FOTO, datos_foto, imagen_actual["mime"], rasgo, True
+                )
+            else:
+                datos = await asyncio.to_thread(ia, INSTRUCCION, rasgo, True)
             if not isinstance(datos, dict):
                 raise ValueError("Formato inesperado")
             poner_tarjetas(datos)
-            estado.value = "¡Listo! Que la risa sea entre amigos 💜"
-            estado.color = "#C4F1D0"
+            avisar("¡Listo! Que la risa sea entre amigos 💜", "#C4F1D0")
         except Exception as exc:
-            estado.value = str(exc) if isinstance(exc, RuntimeError) else "No pudimos crear las bromas. Inténtalo de nuevo."
-            estado.color = "#FFC6D2"
+            mensaje = str(exc) if isinstance(exc, RuntimeError) else "No pudimos crear las bromas. Inténtalo de nuevo."
+            avisar(mensaje, "#FFC6D2")
             resultados.controls.clear()
         finally:
             boton.disabled = False
             otra.disabled = False
             boton.update()
             otra.update()
-            estado.update()
             resultados.update()
+
+    async def terminar_grabacion():
+        nonlocal grabando, tarea_limite
+        if not grabando:
+            return
+        grabando = False
+        if tarea_limite and tarea_limite is not asyncio.current_task():
+            tarea_limite.cancel()
+        await grabadora.stop_recording()
+        microfono.text = "Hablar (máx. 30 s)"
+        microfono.icon = ft.Icons.MIC
+        microfono.update()
+        if not fragmentos_audio:
+            avisar("No se recibió audio. Revisa el permiso del micrófono e inténtalo otra vez.", "#FFC6D2")
+            return
+        avisar("Transcribiendo tu voz…")
+        try:
+            audio_wav = pcm_a_wav(b"".join(fragmentos_audio), tasa=16000, canales=1)
+            transcripcion = await asyncio.to_thread(
+                ia_media, INSTRUCCION_VOZ, audio_wav, "audio/wav", "", False
+            )
+            transcripcion = transcripcion.strip()
+            if not transcripcion:
+                raise RuntimeError("No se entendió la voz. Prueba hablando más cerca del micrófono.")
+            imagen_actual.update({"bytes": None, "mime": None, "nombre": ""})
+            entrada.value = transcripcion[:MAX_TEXTO]
+            entrada.update()
+            archivo_estado.value = "Voz transcrita. Revisa el texto antes de enviarlo para generar bromas."
+            archivo_estado.update()
+            avisar("Voz transcrita. Pulsa Crear mi roast cuando estés listo.", "#C4F1D0")
+        except Exception as exc:
+            avisar(str(exc) if isinstance(exc, RuntimeError) else "No pudimos transcribir el audio. Inténtalo otra vez.", "#FFC6D2")
+
+    async def parar_automaticamente():
+        await asyncio.sleep(30)
+        if grabando:
+            avisar("Llegaste al límite de 30 segundos. Procesando tu voz…")
+            await terminar_grabacion()
+
+    async def alternar_microfono(evento):
+        nonlocal grabando, tarea_limite
+        if grabando:
+            avisar("Procesando tu grabación…")
+            await terminar_grabacion()
+            return
+        try:
+            permiso = await grabadora.has_permission()
+            if not permiso:
+                avisar("Permite el acceso al micrófono para usar la voz.", "#FDE68A")
+                return
+            fragmentos_audio.clear()
+            configuracion = AudioRecorderConfiguration(
+                encoder=AudioEncoder.PCM16BITS,
+                sample_rate=16000,
+                channels=1,
+            )
+            inicio = await grabadora.start_recording(configuration=configuracion)
+            if not inicio:
+                avisar("No se pudo iniciar el micrófono. Revisa el permiso del navegador.", "#FFC6D2")
+                return
+            grabando = True
+            microfono.text = "Detener y transcribir"
+            microfono.icon = ft.Icons.STOP
+            microfono.update()
+            avisar("Grabando… habla ahora. Se detendrá en un máximo de 30 segundos.", "#FDE68A")
+            tarea_limite = asyncio.create_task(parar_automaticamente())
+        except Exception:
+            avisar("No pudimos abrir el micrófono. Acepta el permiso y vuelve a intentarlo.", "#FFC6D2")
 
     boton.on_click = generar
     otra.on_click = generar
+    microfono.on_click = alternar_microfono
+    foto.on_click = elegir_imagen
+    texto.on_click = cargar_txt
+    leer_foto.on_click = leer_texto_foto
 
     panel = ft.Container(
         content=ft.Column(
@@ -148,6 +361,13 @@ def vista():
                 ft.Text("Escribe un hábito cotidiano y crea tres bromas ligeras para compartir.", color="#CFC4DC", size=15),
                 entrada,
                 ejemplos,
+                ft.Text("También puedes entrar por voz, foto o archivo", color="#E9D5FF", size=14, weight=ft.FontWeight.BOLD),
+                ft.Row([microfono, foto, texto, leer_foto], wrap=True, spacing=8, run_spacing=8),
+                ft.Text(
+                    "Voz: hasta 30 segundos. Foto: solo objetos o texto. No subas personas, compañeros, DUI, teléfonos ni contraseñas.",
+                    color="#BDAED0", size=12,
+                ),
+                archivo_estado,
                 ft.Row([boton, otra], wrap=True, spacing=10),
                 estado,
                 resultados,
@@ -155,12 +375,12 @@ def vista():
                     content=ft.Row(
                         [
                             ft.Icon(ft.Icons.INFO_OUTLINE, color="#C4B5FD", size=18),
-                            ft.Text("La IA puede equivocarse. No uses datos privados y comparte solo bromas que se sientan amables.", color="#CFC4DC", size=12, expand=True),
+                            ft.Text("La IA puede equivocarse. Revisa el texto leído antes de generar y comparte solo bromas amables.", color="#CFC4DC", size=12, expand=True),
                         ], spacing=10,
                     ),
                     padding=14, bgcolor="#191321", border_radius=14,
                 ),
-            ], spacing=16,
+            ], spacing=14,
         ),
         padding=26, bgcolor="#241A32", border_radius=24,
         border=ft.Border.all(1, "#58466B"), col={"xs": 12, "lg": 7},
@@ -174,11 +394,11 @@ def vista():
                     padding=10, bgcolor="#2B2039", border_radius=20, width=190,
                 ),
                 ft.Text("Un roast suave.\nRisas reales.", size=42, weight=ft.FontWeight.BOLD, color=BLANCO),
-                ft.Text("La herramienta perfecta para bromear con cariño y mantener la buena vibra.", size=17, color="#CFC4DC"),
+                ft.Text("Escribe, habla, usa la foto de un objeto o carga un texto para crear bromas con cariño.", size=17, color="#CFC4DC"),
                 ft.Container(height=8),
-                ft.Row([ft.Icon(ft.Icons.AUTO_AWESOME, color="#C4B5FD", size=18), ft.Text("Tres ideas, hechas por IA", color=BLANCO, size=14)], spacing=10),
-                ft.Row([ft.Icon(ft.Icons.LOCK_OUTLINE, color="#C4B5FD", size=18), ft.Text("Sin insultos ni temas sensibles", color=BLANCO, size=14)], spacing=10),
-                ft.Row([ft.Icon(ft.Icons.FAVORITE_BORDER, color="#C4B5FD", size=18), ft.Text("Siempre con respeto", color=BLANCO, size=14)], spacing=10),
+                ft.Row([ft.Icon(ft.Icons.MIC, color="#C4B5FD", size=18), ft.Text("La voz se transcribe antes de enviarla", color=BLANCO, size=14)], spacing=10),
+                ft.Row([ft.Icon(ft.Icons.IMAGE, color="#C4B5FD", size=18), ft.Text("La foto puede inspirar las bromas", color=BLANCO, size=14)], spacing=10),
+                ft.Row([ft.Icon(ft.Icons.TEXT_FIELDS, color="#C4B5FD", size=18), ft.Text("Lee archivos .txt y texto en fotos", color=BLANCO, size=14)], spacing=10),
             ], spacing=18, alignment=ft.MainAxisAlignment.CENTER,
         ),
         padding=28, col={"xs": 12, "lg": 5},
@@ -202,4 +422,3 @@ def vista():
         padding=ft.Padding.only(left=22, right=22, top=16, bottom=24),
         bgcolor="#100C16", expand=True,
     )
-

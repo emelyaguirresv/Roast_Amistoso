@@ -1,4 +1,5 @@
-# Paquetes requeridos por la guía de Flet.
+# Paquetes de la app Flet y sus funciones multimedia.
 flet
 flet-web
+flet-audio-recorder
 httpx
