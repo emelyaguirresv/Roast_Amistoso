@@ -1,6 +1,8 @@
 import asyncio
-import base64
+import array
+import math
 from pathlib import Path
+import sys
 
 import flet as ft
 import flet_audio as fta
@@ -46,11 +48,39 @@ def vista(page: ft.Page):
 
     selector = ft.FilePicker()
     fragmentos_audio = []
-    estado = {"grabando": False, "tarea_limite": None, "adjunto": None, "audio": None}
+    estado = {
+        "grabando": False,
+        "tarea_limite": None,
+        "adjunto": None,
+        "audio": None,
+        "voz_detectada": False,
+        "silencio_ms": 0.0,
+        "auto_cierre": False,
+    }
 
     def recibir_audio(evento):
-        if evento.chunk:
-            fragmentos_audio.append(evento.chunk)
+        chunk = evento.chunk
+        if not chunk:
+            return
+        fragmentos_audio.append(chunk)
+        if not estado["grabando"] or estado["auto_cierre"]:
+            return
+        muestras = array.array("h")
+        muestras.frombytes(chunk[: len(chunk) & ~1])
+        if not muestras:
+            return
+        if sys.byteorder == "big":
+            muestras.byteswap()
+        rms = math.sqrt(sum(muestra * muestra for muestra in muestras) / len(muestras))
+        duracion_ms = len(muestras) * 1000 / 44100
+        if rms >= 420:
+            estado["voz_detectada"] = True
+            estado["silencio_ms"] = 0.0
+        elif estado["voz_detectada"]:
+            estado["silencio_ms"] += duracion_ms
+            if estado["silencio_ms"] >= 1400:
+                estado["auto_cierre"] = True
+                page.run_task(finalizar_grabacion, automatico=True)
 
     grabadora = AudioRecorder(on_stream=recibir_audio)
     page.services.extend([selector, grabadora])
@@ -78,7 +108,7 @@ def vista(page: ft.Page):
         aviso.color = color
         aviso.update()
 
-    def agregar_mensaje(rol, texto="", imagen=None, nombre_imagen=None, actualizar=True):
+    def agregar_mensaje(rol, texto="", imagen=None, nombre_imagen=None, actualizar=True, reproducible=False):
         usuario = rol == "user"
         partes = []
         if texto:
@@ -92,6 +122,25 @@ def vista(page: ft.Page):
                     fit=ft.BoxFit.CONTAIN,
                     border_radius=14,
                     semantics_label=nombre_imagen or "Imagen adjunta o generada",
+                )
+            )
+        if reproducible and texto:
+            async def escuchar_respuesta(evento, frase=texto):
+                await leer_en_voz_alta(evento, frase)
+
+            partes.append(
+                ft.Row(
+                    [
+                        ft.IconButton(
+                            icon=ft.Icons.VOLUME_UP,
+                            icon_color="#D8B4FE",
+                            tooltip="Escuchar estas bromas",
+                            on_click=escuchar_respuesta,
+                        ),
+                        ft.Text("Escuchar bromas", size=12, color="#C4B5FD"),
+                    ],
+                    spacing=2,
+                    alignment=ft.MainAxisAlignment.END,
                 )
             )
         burbuja = ft.Container(
@@ -249,7 +298,7 @@ def vista(page: ft.Page):
                 )
             else:
                 datos = await asyncio.to_thread(ia, INSTRUCCION, texto_usuario, True)
-            agregar_mensaje("assistant", frases_como_texto(datos))
+            agregar_mensaje("assistant", frases_como_texto(datos), reproducible=True)
             avisar("Listo. ¿Hacemos otra ronda? 💜", "#C4F1D0")
         except Exception as exc:
             mensaje = str(exc) if isinstance(exc, RuntimeError) else "No pudimos conectar con la IA. Revisa la llave y tu conexión."
@@ -296,36 +345,43 @@ def vista(page: ft.Page):
             enviar_btn.update()
             crear_img_btn.update()
 
-    async def leer_en_voz_alta(evento=None):
-        texto_actual = (entrada.value or "").strip()
+    async def leer_en_voz_alta(evento=None, texto=None):
+        texto_actual = (texto if texto is not None else entrada.value or "").strip()
         if not texto_actual:
             avisar("Primero dicta o escribe un texto para escucharlo.", "#FDE68A")
             return
-        leer_btn.disabled = True
-        leer_btn.update()
-        avisar("Preparando la lectura en voz alta…")
+        boton = getattr(evento, "control", None) if evento else leer_btn
+        boton.disabled = True
+        boton.update()
+        avisar("Preparando las bromas para escucharlas…" if texto is not None else "Preparando la lectura en voz alta…")
         try:
-            audio = await sintetizar_voz(texto_actual[:MAX_TEXTO])
-            audio_base64 = base64.b64encode(audio).decode("ascii")
+            audio = await asyncio.wait_for(
+                asyncio.to_thread(lambda: asyncio.run(sintetizar_voz(texto_actual[:MAX_TEXTO]))),
+                timeout=18,
+            )
+            avisar("Audio listo; reproduciendo las bromas…" if texto is not None else "Audio listo; reproduciendo tu texto…")
             reproductor = estado["audio"]
             if reproductor is None:
-                reproductor = fta.Audio(src_base64=audio_base64, autoplay=False, volume=1.0)
+                reproductor = fta.Audio(src=audio, autoplay=False, volume=1.0)
                 page.services.append(reproductor)
                 estado["audio"] = reproductor
+                page.update()
             else:
                 await reproductor.release()
-                reproductor.src_base64 = audio_base64
+                reproductor.src = audio
                 reproductor.update()
-            await reproductor.play()
-            avisar("Leyendo el texto en voz alta.", "#C4F1D0")
+            page.run_task(reproductor.play)
+            avisar("Leyendo las bromas en voz alta." if texto is not None else "Leyendo tu texto en voz alta.", "#C4F1D0")
+        except asyncio.TimeoutError:
+            avisar("La voz tardó demasiado en prepararse. Inténtalo de nuevo.", "#FFC6D2")
         except Exception as exc:
             mensaje = str(exc) if isinstance(exc, RuntimeError) else "No se pudo reproducir la voz. Revisa internet."
             avisar(mensaje, "#FFC6D2")
         finally:
-            leer_btn.disabled = False
-            leer_btn.update()
+            boton.disabled = False
+            boton.update()
 
-    async def finalizar_grabacion():
+    async def finalizar_grabacion(automatico=False):
         if not estado["grabando"]:
             return
         estado["grabando"] = False
@@ -337,9 +393,14 @@ def vista(page: ft.Page):
         microfono.tooltip = "Hablar"
         microfono.update()
         if not fragmentos_audio:
+            fragmentos_audio.clear()
             avisar("No llegó audio. Revisa el permiso del micrófono e inténtalo de nuevo.", "#FFC6D2")
             return
-        avisar("Transcribiendo tu voz…")
+        if not estado["voz_detectada"]:
+            fragmentos_audio.clear()
+            avisar("No detecté voz. Acércate al micrófono y vuelve a intentarlo.", "#FFC6D2")
+            return
+        avisar("Te detuviste; transcribiendo tu voz…" if automatico else "Transcribiendo tu voz…")
         try:
             wav = pcm_a_wav(b"".join(fragmentos_audio), tasa=44100, canales=1)
             transcripcion = await asyncio.to_thread(transcribir_audio, wav, INSTRUCCION_VOZ)
@@ -353,9 +414,13 @@ def vista(page: ft.Page):
             avisar(mensaje, "#FFC6D2")
 
     async def detener_automaticamente():
-        await asyncio.sleep(30)
+        await asyncio.sleep(12)
+        if estado["grabando"] and not estado["voz_detectada"]:
+            await finalizar_grabacion(automatico=True)
+            return
+        await asyncio.sleep(18)
         if estado["grabando"]:
-            await finalizar_grabacion()
+            await finalizar_grabacion(automatico=True)
 
     async def alternar_microfono(evento=None):
         if estado["grabando"]:
@@ -367,6 +432,9 @@ def vista(page: ft.Page):
                 avisar("Dale permiso al navegador para usar el micrófono.", "#FDE68A")
                 return
             fragmentos_audio.clear()
+            estado["voz_detectada"] = False
+            estado["silencio_ms"] = 0.0
+            estado["auto_cierre"] = False
             config = AudioRecorderConfiguration(
                 encoder=AudioEncoder.PCM16BITS,
                 sample_rate=44100,
@@ -383,7 +451,7 @@ def vista(page: ft.Page):
             microfono.icon = ft.Icons.STOP
             microfono.tooltip = "Detener y transcribir"
             microfono.update()
-            avisar("Te escucho… vuelve a pulsar el micrófono para enviar la voz.", "#FDE68A")
+            avisar("Te escucho… me detendré y transcribiré cuando termines de hablar.", "#FDE68A")
             estado["tarea_limite"] = asyncio.create_task(detener_automaticamente())
         except Exception:
             avisar("No pudimos abrir el micrófono. Acepta el permiso y vuelve a intentarlo.", "#FFC6D2")
@@ -494,7 +562,7 @@ def vista(page: ft.Page):
                 mensajes,
                 ft.Container(
                     content=ft.Column(
-                        [aviso, composer, ft.Text("Tu audio y tus imágenes se procesan en línea. Crear imágenes puede generar un cargo de Google. Evita datos privados.", size=10, color="#857992", text_align=ft.TextAlign.CENTER)],
+                        [aviso, composer, ft.Text("Tu audio y tus imágenes se procesan en línea. Crear imágenes requiere facturación de Google (aprox. $0.034 por imagen 1K). Evita datos privados.", size=10, color="#857992", text_align=ft.TextAlign.CENTER)],
                         spacing=7,
                         horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
                     ),

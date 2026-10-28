@@ -7,7 +7,12 @@ import httpx
 # Gemini 2.5 queda fuera: Google limita su acceso y puede responder 404 aunque
 # aparezca en el listado general de modelos.
 MODELOS = []
-for candidato in ("gemini-3.6-flash", "gemini-3.5-flash", os.getenv("GEMINI_MODEL", "").strip()):
+for candidato in (
+    "gemini-3.5-flash-lite",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    os.getenv("GEMINI_MODEL", "").strip(),
+):
     if candidato and candidato not in MODELOS:
         MODELOS.append(candidato)
 
